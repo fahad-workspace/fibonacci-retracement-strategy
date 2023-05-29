@@ -1,0 +1,92 @@
+//@version=5
+strategy("Fibonacci Etracement Strategy", overlay=true)
+
+lookback = 20
+riskPerTrade = 0.01  // initial risk 1% per trade
+volLookback = 14  // lookback for volume average
+cooldownPeriod = 20  // cooldown period in bars after a losing trade
+maxConsecLosses = 3  // maximum allowed consecutive losses
+maxDrawdown = 0.25  // maximum allowed drawdown
+takeProfitMultiplier = 3 // multiplier of ATR for take profit
+atrMultiplier = 3 // multiplier of ATR for stop loss
+slippage = 0.005 // estimated slippage
+
+var float equityHigh = na
+var int lastTradeBar = na
+var int consecLosses = 0
+var float lastTradePnL = 0.0
+var float riskPerTradeVar = riskPerTrade
+var bool tradeAllowed = na
+
+// RSI Filter
+rsiPeriod = 14
+overBought = 70
+overSold = 30
+rsi = ta.rsi(close, rsiPeriod)
+
+equityHigh := na(equityHigh[1]) ? strategy.equity : (equityHigh[1] > strategy.equity ? equityHigh[1] : strategy.equity)
+drawdown = (equityHigh - strategy.equity) / equityHigh
+tradeAllowed := drawdown < maxDrawdown
+
+// Calculate the previous move
+highLevel = ta.highest(high, lookback)
+lowLevel = ta.lowest(low, lookback)
+previousMove = highLevel - lowLevel
+
+// Calculate the Fibonacci retracement levels
+fib_long = highLevel - previousMove * 0.220
+fib_short = highLevel - previousMove * 0.145
+
+// Plot the Fibonacci retracement levels
+line.new(x1=bar_index[lookback], y1=fib_long, x2=bar_index, y2=fib_long, color=color.red, width = 1)
+line.new(x1=bar_index[lookback], y1=fib_short, x2=bar_index, y2=fib_short, color=color.green, width = 1)
+
+// Plotting the highest and lowest level for reference
+plot(highLevel, color=color.blue)
+plot(lowLevel, color=color.blue)
+
+// Trend filter
+sma200 = ta.sma(close, 200)
+plot(sma200, color=color.gray)
+
+// Volume Filter
+volAvg = ta.sma(volume, volLookback)
+
+// Calculate ATR for dynamic stop loss and take profit
+atr = ta.atr(14)
+
+// Check if the cooldown period has passed
+cooldownPassed = na(lastTradeBar) or bar_index - lastTradeBar >= cooldownPeriod
+
+// Update last trade bar and count consecutive losses
+if (strategy.position_size[1] != 0 and strategy.position_size == 0)
+    lastTradeBar := bar_index
+    lastTradePnL := strategy.netprofit - lastTradePnL
+    consecLosses := lastTradePnL < 0 ? consecLosses + 1 : 0
+    riskPerTradeVarTemp = riskPerTrade / (drawdown + 1)
+    riskPerTradeVar := riskPerTradeVarTemp < riskPerTrade * 2 ? riskPerTradeVarTemp : riskPerTrade * 2
+
+// Define trade entry and exit conditions
+longCondition = ta.crossover(close, fib_long) and close > sma200 and volume > volAvg and cooldownPassed and consecLosses < maxConsecLosses and tradeAllowed and rsi < overBought
+if (longCondition)
+    stopLevel = close - atr*atrMultiplier
+    qty = math.floor(strategy.equity * riskPerTradeVar / (stopLevel - close))
+    if (qty != 0)
+        if (qty < 0) 
+            qty := qty * -1
+        strategy.entry("Long", strategy.long, qty)
+        strategy.exit("Exit Long", "Long", stop=stopLevel * (1 + slippage))
+        strategy.exit("Take Profit Long", "Long", limit=close + atr*takeProfitMultiplier)
+        label.new(x=bar_index, y=low, text="L\nqty="+str.tostring(qty)+"\nSL="+str.tostring(stopLevel)+"\nTP="+str.tostring(close+atr*takeProfitMultiplier), color=color.green)
+
+shortCondition = ta.crossunder(close, fib_short) and close < sma200 and volume > volAvg and cooldownPassed and consecLosses < maxConsecLosses and tradeAllowed and rsi > overSold
+if (shortCondition)
+    stopLevel = close + atr*atrMultiplier
+    qty = math.floor(strategy.equity * riskPerTradeVar / (stopLevel - close))
+    if (qty != 0)
+        if (qty < 0) 
+            qty := qty * -1
+        strategy.entry("Short", strategy.short, qty)
+        strategy.exit("Exit Short", "Short", stop=stopLevel * (1 - slippage))
+        strategy.exit("Take Profit Short", "Short", limit=close - atr*takeProfitMultiplier)
+        label.new(x=bar_index, y=high, text="S\nqty="+str.tostring(qty)+"\nSL="+str.tostring(stopLevel)+"\nTP="+str.tostring(close-atr*takeProfitMultiplier), color=color.red)
